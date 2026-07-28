@@ -3,42 +3,19 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
 import os
-import sys
-import io
-import requests
 import warnings
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
 
-print("Loading Melbourne housing data and training model...")
+print("Loading Melbourne housing data...")
+df = pd.read_csv("melb_data.csv")
 
-# Try multiple URLs for the dataset
-urls = [
-    "https://raw.githubusercontent.com/plotly/datasets/master/melbourne_housing_snapshot.csv",
-    "https://raw.githubusercontent.com/dansbecker/melbourne-housing-snapshot/master/melb_data.csv",
-]
+if 'Bedroom2' in df.columns:
+    df.rename(columns={'Bedroom2': 'Bedroom'}, inplace=True)
 
-df_raw = None
-for url in urls:
-    try:
-        response = requests.get(url, timeout=30)
-        if response.status_code == 200:
-            df_raw = pd.read_csv(io.StringIO(response.text))
-            print(f"Loaded from: {url}")
-            break
-    except Exception as e:
-        print(f"Failed: {url} - {type(e).__name__}")
-
-if df_raw is None:
-    raise RuntimeError("Could not load Melbourne housing dataset from any source.")
-
-if 'Bedroom2' in df_raw.columns:
-    df_raw.rename(columns={'Bedroom2': 'Bedroom'}, inplace=True)
-
-df = df_raw.dropna(subset=['Price']).copy()
+df = df.dropna(subset=['Price']).copy()
 num_cols = df.select_dtypes(include=[np.number]).columns
 cat_cols = df.select_dtypes(include=['object', 'category']).columns
 df[num_cols] = df[num_cols].fillna(df[num_cols].median())
@@ -49,13 +26,13 @@ df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
 df['Price_Per_Sqm'] = np.where(df['Landsize'] > 0, df['Price'] / df['Landsize'], np.nan)
 df['Price_Per_Sqm'] = df['Price_Per_Sqm'].fillna(df['Price_Per_Sqm'].median())
 
+print(f"Data loaded: {len(df)} properties. Training model...")
+
 avm_features = ['Rooms', 'Type', 'Distance', 'Postcode', 'Bedroom', 'Bathroom', 
                 'Car', 'Landsize', 'BuildingArea', 'YearBuilt', 'CouncilArea']
 X = df[avm_features].copy()
 y = df['Price']
 X = pd.get_dummies(X, columns=['Type', 'CouncilArea'], drop_first=True)
-
-X = X.reindex(columns=X.columns.union(pd.get_dummies(df[['Type', 'CouncilArea']], drop_first=True).columns, sort=False), fill_value=0)
 
 if 'Regionname' in df.columns:
     region_counts = df['Regionname'].value_counts()
@@ -70,13 +47,9 @@ model = RandomForestRegressor(n_estimators=200, max_depth=20, min_samples_split=
 model.fit(X_train, y_train)
 
 suburbs = sorted(df['Suburb'].unique().tolist())
-
-city_median_price_sqm = df['Price_Per_Sqm'].median()
 suburb_stats = df.groupby('Suburb').agg(
-    Avg_Price=('Price', 'mean'),
-    Median_Price=('Price', 'median'),
-    Avg_Price_Per_Sqm=('Price_Per_Sqm', 'mean'),
-    Transaction_Count=('Price', 'count')
+    Avg_Price=('Price', 'mean'), Median_Price=('Price', 'median'),
+    Avg_Price_Per_Sqm=('Price_Per_Sqm', 'mean'), Transaction_Count=('Price', 'count')
 ).round(0)
 
 total_properties = len(df)
@@ -84,7 +57,7 @@ avg_price = df['Price'].mean()
 median_price = df['Price'].median()
 unique_suburbs = df['Suburb'].nunique()
 
-print(f"Model ready. {len(df):,} properties, {unique_suburbs} suburbs.")
+print(f"Model ready. {total_properties:,} properties, {unique_suburbs} suburbs.")
 
 PAGE_CSS = """
 :root{--bg:#0a0a0f;--card:#12121a;--border:#252540;--text:#e8e8f0;--muted:#9898b0;--accent:#6366f1;--green:#22c55e;}
@@ -110,9 +83,7 @@ def index():
     selected_suburb = request.args.get("suburb", suburbs[0])
     if selected_suburb not in suburbs:
         selected_suburb = suburbs[0]
-    
     stats = suburb_stats.loc[selected_suburb] if selected_suburb in suburb_stats.index else None
-    
     options = "".join(f'<option value="{s}"{" selected" if s == selected_suburb else ""}>{s}</option>' for s in suburbs[:150])
     
     stats_html = ""
@@ -132,10 +103,8 @@ def index():
 <title>Real Estate Market Intelligence</title>
 <style>{PAGE_CSS}</style>
 </head><body><div class="wrap">
-<header>
-  <h1>Real Estate Market Intelligence</h1>
-  <p class="sub">Melbourne Housing Market. {total_properties:,} properties across {unique_suburbs} suburbs.</p>
-</header>
+<header><h1>Real Estate Market Intelligence</h1>
+<p class="sub">Melbourne Housing Market. {total_properties:,} properties across {unique_suburbs} suburbs.</p></header>
 <div class="grid">
   <div class="card"><div class="k">Total Properties</div><div class="v">{total_properties:,}</div></div>
   <div class="card"><div class="k">Average Price</div><div class="v" style="font-size:22px;">${avg_price:,.0f}</div></div>
